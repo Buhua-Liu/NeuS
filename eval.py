@@ -65,6 +65,7 @@ if __name__ == '__main__':
         n2 = np.floor(l2 / thr)
 
         with mp.Pool() as mp_pool:
+            # Supersampling the faces with with a lower point density than 0.2 mm
             new_pts = mp_pool.map(sample_single_tri, ((n1[i,0], n2[i,0], v1[i:i+1], v2[i:i+1], tri_vert[i:i+1,0]) for i in range(len(n1))), chunksize=1024)
 
         new_pts = np.concatenate(new_pts, axis=0) # 2598797
@@ -78,6 +79,11 @@ if __name__ == '__main__':
 
     pbar.update(1)
     pbar.set_description('random shuffle pcd index')
+    # MVS methods typically generate more 3D points around strongly textured surface regions.
+    # This can potentially cause a bias in the evalutation where we ideally would like the error
+    # measure uniformly sampled on the reconstructed surface. To avoid this problem, we decimate
+    # the MVS point clouds such that no two points are closer than 0.2 mm by visting the points
+    # randomly and removing nearby points residing in a 0.2 mm neighobrhood.
     shuffle_rng = np.random.default_rng()
     shuffle_rng.shuffle(data_pcd, axis=0)
 
@@ -87,14 +93,17 @@ if __name__ == '__main__':
     nn_engine.fit(data_pcd)
     rnn_idxs = nn_engine.radius_neighbors(data_pcd, radius=thresh, return_distance=False)
     mask = np.ones(data_pcd.shape[0], dtype=np.bool_)
+    # Reduce the high point densities
     for curr, idxs in enumerate(rnn_idxs):
         if mask[curr]:
             mask[idxs] = 0
             mask[curr] = 1
-    data_down = data_pcd[mask] # 2225544, 3
+    data_down = data_pcd[mask] # 2225544, 3 (31.6% reduction)
 
     pbar.update(1)
     pbar.set_description('masking data pcd')
+    # Only use the points within the observability mask, which is obtained as the union of
+    # the individual visibility mask estimates of the 49 or 64 structured light scans.
     # - "ObsMask" : Information about which parts of 3D space should be used for evaluation.
     obs_mask_file = loadmat(f'{args.dataset_dir}/ObsMask/ObsMask{args.scan}_10.mat')
     # ObsMask.shape = (371, 447, 286)
@@ -123,8 +132,9 @@ if __name__ == '__main__':
     pbar.set_description('compute data2stl')
     nn_engine.fit(stl)
     dist_d2s, idx_d2s = nn_engine.kneighbors(data_in_obs, n_neighbors=1, return_distance=True)
-    max_dist = args.max_dist # 20
+    max_dist = args.max_dist # Remove all points with 1-NN distances over 20 mm, to avoid biasing by outliers
     mean_d2s = dist_d2s[dist_d2s < max_dist].mean() # 0.706285287937142
+    # mean_d2s refers to *Accuracy*, which is measured as the distance from the MVS reconstruction to the structured light reference.
 
     pbar.update(1)
     pbar.set_description('compute stl2data')
@@ -136,11 +146,12 @@ if __name__ == '__main__':
 
     stl_hom = np.concatenate([stl, np.ones_like(stl[:,:1])], -1)
     above = (ground_plane.reshape((1,4)) * stl_hom).sum(-1) > 0
-    stl_above = stl[above] # (1670753, 3)
+    stl_above = stl[above] # (1670753, 3) (51.0% reduction)
 
     nn_engine.fit(data_in)
     dist_s2d, idx_s2d = nn_engine.kneighbors(stl_above, n_neighbors=1, return_distance=True)
     mean_s2d = dist_s2d[dist_s2d < max_dist].mean() # 0.5241285046093108
+    # mean_s2d refers to *Completeness*, which is measured as the distance from the structured light reference to the MVS reconstruction.
 
     pbar.update(1)
     pbar.set_description('visualize error')
