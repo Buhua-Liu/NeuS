@@ -45,24 +45,22 @@ class Dataset:
         self.render_cameras_name = conf.get_string('render_cameras_name')
         self.object_cameras_name = conf.get_string('object_cameras_name')
 
-        self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
+        # self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
 
         camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
         self.camera_dict = camera_dict
         self.images_lis = sorted(glob(os.path.join(self.data_dir, 'image/*.png')))
-        self.n_images = len(self.images_lis)
-        self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
+        self.n_images = len(self.images_lis) # 49
+        self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0 # [49, 1200, 1600, 3]
         self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
-        self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
+        self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0 # [49, 1200, 1600, 3]
 
         # world_mat is a projection matrix from world to image
-        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
-
-        self.scale_mats_np = []
+        self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)] #[49, 4, 4]
 
         # scale_mat: used for coordinate normalization, we assume the scene to render is inside a unit sphere at origin.
-        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
+        self.scale_mats_np = [camera_dict['scale_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)] # [49, 4, 4]
 
         self.intrinsics_all = []
         self.pose_all = []

@@ -40,9 +40,9 @@ def sample_pdf(bins, weights, n_samples, det=False):
     # This implementation is from NeRF
     # Get pdf
     weights = weights + 1e-5  # prevent nans
-    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    pdf = weights / torch.sum(weights, -1, keepdim=True) # batch_size, n_samples-1
     cdf = torch.cumsum(pdf, -1)
-    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
+    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1) # batch_size, n_samples
     # Take uniform samples
     if det:
         u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples)
@@ -51,15 +51,15 @@ def sample_pdf(bins, weights, n_samples, det=False):
         u = torch.rand(list(cdf.shape[:-1]) + [n_samples])
 
     # Invert CDF
-    u = u.contiguous()
-    inds = torch.searchsorted(cdf, u, right=True)
+    u = u.contiguous() # batch_size, n_samples
+    inds = torch.searchsorted(cdf, u, right=True) # batch_size, n_samples
     below = torch.max(torch.zeros_like(inds - 1), inds - 1)
     above = torch.min((cdf.shape[-1] - 1) * torch.ones_like(inds), inds)
-    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+    inds_g = torch.stack([below, above], -1)  # batch_size, n_samples, 2
 
-    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
-    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
-    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]  # batch_size, n_samples, n_samples
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)  # batch_size, n_samples, 2
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)  # batch_size, n_samples, 2
 
     denom = (cdf_g[..., 1] - cdf_g[..., 0])
     denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
@@ -134,14 +134,14 @@ class NeuSRenderer:
         Up sampling give a fixed inv_s
         """
         batch_size, n_samples = z_vals.shape
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # n_rays, n_samples, 3
-        radius = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=False)
-        inside_sphere = (radius[:, :-1] < 1.0) | (radius[:, 1:] < 1.0)
-        sdf = sdf.reshape(batch_size, n_samples)
+        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # batch_size, n_samples, 3
+        radius = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=False)  # batch_size, n_samples
+        inside_sphere = (radius[:, :-1] < 1.0) | (radius[:, 1:] < 1.0)  # batch_size, n_samples-1
+        sdf = sdf.reshape(batch_size, n_samples)  # batch_size, n_samples
         prev_sdf, next_sdf = sdf[:, :-1], sdf[:, 1:]
         prev_z_vals, next_z_vals = z_vals[:, :-1], z_vals[:, 1:]
-        mid_sdf = (prev_sdf + next_sdf) * 0.5
-        cos_val = (next_sdf - prev_sdf) / (next_z_vals - prev_z_vals + 1e-5)
+        mid_sdf = (prev_sdf + next_sdf) * 0.5 # batch_size, n_samples-1
+        cos_val = (next_sdf - prev_sdf) / (next_z_vals - prev_z_vals + 1e-5) # batch_size, n_samples-1
 
         # ----------------------------------------------------------------------------------------------------------
         # Use min value of [ cos, prev_cos ]
@@ -158,9 +158,9 @@ class NeuSRenderer:
         # |     \/
         # |
         # ----------------------------------------------------------------------------------------------------------
-        prev_cos_val = torch.cat([torch.zeros([batch_size, 1]), cos_val[:, :-1]], dim=-1)
-        cos_val = torch.stack([prev_cos_val, cos_val], dim=-1)
-        cos_val, _ = torch.min(cos_val, dim=-1, keepdim=False)
+        prev_cos_val = torch.cat([torch.zeros([batch_size, 1]), cos_val[:, :-1]], dim=-1) # batch_size, n_samples-1
+        cos_val = torch.stack([prev_cos_val, cos_val], dim=-1) # batch_size, n_samples-1, 2
+        cos_val, _ = torch.min(cos_val, dim=-1, keepdim=False) # batch_size, n_samples-1
         cos_val = cos_val.clip(-1e3, 0.0) * inside_sphere
 
         dist = (next_z_vals - prev_z_vals)
@@ -168,23 +168,23 @@ class NeuSRenderer:
         next_esti_sdf = mid_sdf + cos_val * dist * 0.5
         prev_cdf = torch.sigmoid(prev_esti_sdf * inv_s)
         next_cdf = torch.sigmoid(next_esti_sdf * inv_s)
-        alpha = (prev_cdf - next_cdf + 1e-5) / (prev_cdf + 1e-5)
+        alpha = (prev_cdf - next_cdf + 1e-5) / (prev_cdf + 1e-5) # batch_size, n_samples-1
         weights = alpha * torch.cumprod(
-            torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+            torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1] # batch_size, n_samples-1
 
-        z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
+        z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach() # batch_size, n_importance
         return z_samples
 
     def cat_z_vals(self, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False):
         batch_size, n_samples = z_vals.shape
         _, n_importance = new_z_vals.shape
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * new_z_vals[..., :, None]
+        pts = rays_o[:, None, :] + rays_d[:, None, :] * new_z_vals[..., :, None] # batch_size, n_importance, 3
         z_vals = torch.cat([z_vals, new_z_vals], dim=-1)
-        z_vals, index = torch.sort(z_vals, dim=-1)
+        z_vals, index = torch.sort(z_vals, dim=-1) # batch_size, n_samples+n_importance
 
         if not last:
-            new_sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, n_importance)
-            sdf = torch.cat([sdf, new_sdf], dim=-1)
+            new_sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, n_importance)  # batch_size, n_importance
+            sdf = torch.cat([sdf, new_sdf], dim=-1)  # batch_size, n_samples+n_importance
             xx = torch.arange(batch_size)[:, None].expand(batch_size, n_samples + n_importance).reshape(-1)
             index = index.reshape(-1)
             sdf = sdf[(xx, index)].reshape(batch_size, n_samples + n_importance)
@@ -327,13 +327,13 @@ class NeuSRenderer:
                                                 z_vals,
                                                 sdf,
                                                 self.n_importance // self.up_sample_steps,
-                                                64 * 2**i)
+                                                64 * 2**i)  # batch_size, (i + 1) * self.n_importance // self.up_sample_steps
                     z_vals, sdf = self.cat_z_vals(rays_o,
                                                   rays_d,
                                                   z_vals,
                                                   new_z_vals,
                                                   sdf,
-                                                  last=(i + 1 == self.up_sample_steps))
+                                                  last=(i + 1 == self.up_sample_steps))  # batch_size, self.n_samples + (i + 1) *  self.n_importance // self.up_sample_steps
 
             n_samples = self.n_samples + self.n_importance
 

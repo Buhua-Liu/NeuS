@@ -54,7 +54,6 @@ class Runner:
         self.mask_weight = self.conf.get_float('train.mask_weight')
         self.is_continue = is_continue
         self.mode = mode
-        self.model_list = []
         self.writer = None
 
         # Networks
@@ -101,7 +100,7 @@ class Runner:
         res_step = self.end_iter - self.iter_step
         image_perm = self.get_image_perm()
 
-        for iter_i in tqdm(range(res_step)):
+        for _ in tqdm(range(res_step)):
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
